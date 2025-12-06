@@ -28,18 +28,19 @@ from config import (
 )
 from extractors.frames import extract_frames, get_video_duration
 from analyzers.vision_analyzer import analyze_pil_image, map_to_tags
-from analyzers.face_analyzer import FaceAnalyzer, BACKEND_DLIB, BACKEND_INSIGHTFACE, BACKEND_COREML
+from analyzers.face_analyzer import FaceAnalyzer, BACKEND_DLIB, BACKEND_INSIGHTFACE, BACKEND_COREML, BACKEND_DEEPFACE, DEEPFACE_MODELS
 from storage.database import FaceDatabase
 from storage.finder_tags import add_tags, get_current_tags
 
 
 def find_videos(directory: Path) -> list[Path]:
-    """Find all video files in a directory."""
+    """Find all video files in a directory, sorted by modification time (newest first)."""
     videos = []
     for ext in VIDEO_EXTENSIONS:
         videos.extend(directory.glob(f"*{ext}"))
         videos.extend(directory.glob(f"**/*{ext}"))  # Recursive
-    return sorted(set(videos))
+    # Sort by modification time, newest first
+    return sorted(set(videos), key=lambda p: p.stat().st_mtime, reverse=True)
 
 
 def process_video(
@@ -237,9 +238,9 @@ Examples:
         help=f"Seconds between extracted frames (default: {FRAME_INTERVAL_SECONDS})"
     )
     parser.add_argument(
-        "--skip-processed",
+        "--reprocess",
         action="store_true",
-        help="Skip videos that have already been processed"
+        help="Reprocess videos that have already been processed (default: skip them)"
     )
     parser.add_argument(
         "--fast",
@@ -249,9 +250,23 @@ Examples:
     parser.add_argument(
         "--backend", "-b",
         type=str,
-        choices=["dlib", "insightface", "coreml"],
+        choices=["dlib", "insightface", "coreml", "deepface"],
         default="dlib",
-        help="Face recognition backend: dlib (CPU, default), insightface (ONNX), coreml (Neural Engine)"
+        help="Face recognition backend: dlib (CPU, default), insightface (ONNX), coreml (Neural Engine), deepface (ArcFace/Facenet512)"
+    )
+    parser.add_argument(
+        "--deepface-model", "-m",
+        type=str,
+        choices=DEEPFACE_MODELS,
+        default="ArcFace",
+        help="DeepFace model to use (default: ArcFace). Options: " + ", ".join(DEEPFACE_MODELS)
+    )
+    parser.add_argument(
+        "--threshold", "-t",
+        type=float,
+        default=None,
+        help="Face matching threshold (higher = more lenient, matches more faces as same person). "
+             "Default varies by backend. Try 0.5-0.6 if too many persons are created."
     )
     parser.add_argument(
         "--workers", "-j",
@@ -293,20 +308,27 @@ Examples:
         "dlib": BACKEND_DLIB,
         "insightface": BACKEND_INSIGHTFACE,
         "coreml": BACKEND_COREML,
+        "deepface": BACKEND_DEEPFACE,
     }
     face_backend = backend_map[args.backend]
 
     db = FaceDatabase(FACES_DB_PATH)
-    face_analyzer = FaceAnalyzer(db, model=face_model, backend=face_backend)
+    face_analyzer = FaceAnalyzer(
+        db, model=face_model, backend=face_backend,
+        deepface_model=args.deepface_model,
+        threshold=args.threshold
+    )
 
     if args.verbose:
         backend_desc = {
             "dlib": "dlib/face_recognition (CPU)",
             "insightface": "InsightFace + ONNX (CPU)",
             "coreml": "InsightFace + CoreML (Neural Engine)",
+            "deepface": f"DeepFace + {args.deepface_model}",
         }
         model_desc = 'faster HOG' if face_model == 'hog' else 'accurate CNN'
         print(f"Backend: {backend_desc[args.backend]}")
+        print(f"Threshold: {face_analyzer.threshold:.2f}")
         if args.backend == "dlib":
             print(f"Model: {model_desc}")
         print()
@@ -356,11 +378,11 @@ Examples:
 
     print(f"Found {len(videos)} video(s) in {args.directory}\n")
 
-    # Filter out already-processed videos if requested
+    # Filter out already-processed videos (unless --reprocess is set)
     videos_to_process = []
     skipped = 0
     for video in videos:
-        if args.skip_processed and db.is_video_processed(str(video)):
+        if not args.reprocess and db.is_video_processed(str(video)):
             if args.verbose:
                 print(f"Skipping (already processed): {video.name}")
             skipped += 1

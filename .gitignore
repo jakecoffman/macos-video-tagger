@@ -13,3 +13,9 @@ wheels/
 data/*.db
 data/*.sqlite
 *.db
+
+# Thumbnail cache
+.cache/
+
+# Rust stuff
+target/

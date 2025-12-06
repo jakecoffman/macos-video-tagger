@@ -13,6 +13,10 @@ from storage.database import FaceDatabase
 BACKEND_DLIB = "dlib"           # Original face_recognition library (CPU)
 BACKEND_INSIGHTFACE = "insightface"  # InsightFace with ONNX (can use CoreML)
 BACKEND_COREML = "coreml"       # Apple Vision + CoreML (Neural Engine)
+BACKEND_DEEPFACE = "deepface"   # DeepFace with multiple model options (ArcFace, Facenet512, etc.)
+
+# DeepFace model options (in order of typical accuracy)
+DEEPFACE_MODELS = ["ArcFace", "Facenet512", "Facenet", "VGG-Face", "SFace", "GhostFaceNet"]
 
 
 class FaceBackend(ABC):
@@ -115,6 +119,72 @@ class InsightFaceBackend(FaceBackend):
         return float(1 - similarity)
 
 
+class DeepFaceBackend(FaceBackend):
+    """
+    DeepFace backend supporting multiple models.
+    ArcFace and Facenet512 are generally most accurate.
+    """
+
+    def __init__(self, model_name: str = "ArcFace"):
+        from deepface import DeepFace
+        self.DeepFace = DeepFace
+        self.model_name = model_name
+
+        # Pre-load the model to avoid delay on first use
+        print(f"Loading DeepFace model: {model_name}...")
+        DeepFace.build_model(model_name)
+
+        # Detection backends in order of preference
+        # retinaface is most accurate, opencv is fastest
+        self.detector_backend = "retinaface"
+
+        # Thresholds vary by model - these are cosine distance thresholds
+        # Higher = more lenient (more likely to match), Lower = stricter
+        self.thresholds = {
+            "ArcFace": 0.68,
+            "Facenet512": 0.45,  # Increased from 0.30 for better cross-video matching
+            "Facenet": 0.45,
+            "VGG-Face": 0.50,
+            "SFace": 0.59,
+            "GhostFaceNet": 0.65,
+        }
+
+    def detect_and_encode(self, image_array: np.ndarray) -> list[np.ndarray]:
+        try:
+            # DeepFace.represent returns embeddings for all detected faces
+            results = self.DeepFace.represent(
+                img_path=image_array,
+                model_name=self.model_name,
+                detector_backend=self.detector_backend,
+                enforce_detection=False,  # Don't raise error if no face found
+                align=True,
+            )
+
+            embeddings = []
+            for result in results:
+                # Filter out low-confidence detections
+                if "face_confidence" in result and result["face_confidence"] < 0.9:
+                    continue
+                embedding = np.array(result["embedding"])
+                embeddings.append(embedding)
+
+            return embeddings
+        except Exception as e:
+            # DeepFace can throw errors on problematic images
+            return []
+
+    def compute_distance(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
+        # Use cosine distance (same as InsightFace)
+        similarity = np.dot(embedding1, embedding2) / (
+            np.linalg.norm(embedding1) * np.linalg.norm(embedding2)
+        )
+        return float(1 - similarity)
+
+    def get_threshold(self) -> float:
+        """Get the recommended threshold for the current model."""
+        return self.thresholds.get(self.model_name, 0.5)
+
+
 class CoreMLBackend(FaceBackend):
     """
     Apple Vision for detection + CoreML for embeddings.
@@ -177,7 +247,7 @@ class CoreMLBackend(FaceBackend):
         return float(1 - similarity)
 
 
-def create_backend(backend_name: str, model: str = "cnn") -> FaceBackend:
+def create_backend(backend_name: str, model: str = "cnn", deepface_model: str = "ArcFace") -> FaceBackend:
     """Factory function to create the appropriate backend."""
     if backend_name == BACKEND_DLIB:
         return DlibBackend(model=model)
@@ -186,8 +256,10 @@ def create_backend(backend_name: str, model: str = "cnn") -> FaceBackend:
     elif backend_name == BACKEND_COREML:
         # InsightFace with CoreML execution provider
         return InsightFaceBackend(use_coreml=True)
+    elif backend_name == BACKEND_DEEPFACE:
+        return DeepFaceBackend(model_name=deepface_model)
     else:
-        raise ValueError(f"Unknown backend: {backend_name}. Use one of: {BACKEND_DLIB}, {BACKEND_INSIGHTFACE}, {BACKEND_COREML}")
+        raise ValueError(f"Unknown backend: {backend_name}. Use one of: {BACKEND_DLIB}, {BACKEND_INSIGHTFACE}, {BACKEND_COREML}, {BACKEND_DEEPFACE}")
 
 
 class FaceAnalyzer:
@@ -196,30 +268,37 @@ class FaceAnalyzer:
     def __init__(
         self,
         db: FaceDatabase,
-        threshold: float = 0.6,
+        threshold: float | None = None,
         model: str = "cnn",
-        backend: str = BACKEND_DLIB
+        backend: str = BACKEND_DLIB,
+        deepface_model: str = "ArcFace"
     ):
         """
         Initialize the face analyzer.
 
         Args:
             db: Face database for storing/retrieving embeddings
-            threshold: Distance threshold for face matching (lower = stricter)
+            threshold: Distance threshold for face matching (higher = more lenient).
+                       If None, uses backend-specific default.
             model: For dlib backend: "cnn" (more accurate) or "hog" (faster)
-            backend: Which backend to use - "dlib", "insightface", or "coreml"
+            backend: Which backend to use - "dlib", "insightface", "coreml", or "deepface"
+            deepface_model: For deepface backend: "ArcFace", "Facenet512", etc.
         """
         self.db = db
-        self.threshold = threshold
         self.backend_name = backend
 
-        # Adjust threshold for different backends (they have different scales)
-        if backend in (BACKEND_INSIGHTFACE, BACKEND_COREML):
-            # InsightFace uses cosine distance (0-2 scale, 0 = identical)
-            # Typical threshold is 0.4-0.6 for cosine distance
-            self.threshold = min(threshold, 0.5)  # Adjust if needed
+        self._backend = create_backend(backend, model, deepface_model)
 
-        self._backend = create_backend(backend, model)
+        # Set threshold: user override > backend default
+        if threshold is not None:
+            self.threshold = threshold
+        elif backend == BACKEND_DEEPFACE and hasattr(self._backend, 'get_threshold'):
+            self.threshold = self._backend.get_threshold()
+        elif backend in (BACKEND_INSIGHTFACE, BACKEND_COREML):
+            self.threshold = 0.5
+        else:
+            self.threshold = 0.6  # dlib default
+
         self._known_faces_cache = None
 
     def _refresh_cache(self):
@@ -286,6 +365,7 @@ class FaceAnalyzer:
     def _match_or_create(self, encoding: np.ndarray, source_video: str) -> str:
         """
         Match a face encoding to a known person or create a new person.
+        Uses per-person average embeddings for more robust matching.
 
         Args:
             encoding: Face embedding vector
@@ -303,29 +383,53 @@ class FaceAnalyzer:
             self._refresh_cache()
             return "Person 1"
 
-        # Compare against all known faces
-        distances = []
-        for _, _, known_encoding in known_faces:
-            dist = self._backend.compute_distance(known_encoding, encoding)
-            distances.append(dist)
+        # Group embeddings by person and compute average embedding per person
+        person_embeddings: dict[int, list[np.ndarray]] = {}
+        person_names: dict[int, str] = {}
+        for person_id, person_name, emb in known_faces:
+            if person_id not in person_embeddings:
+                person_embeddings[person_id] = []
+                person_names[person_id] = person_name
+            person_embeddings[person_id].append(emb)
 
-        distances = np.array(distances)
-        best_match_idx = int(np.argmin(distances))
-        best_distance = distances[best_match_idx]
+        # Compare against average embedding per person
+        best_distance = float('inf')
+        best_person_id = None
+
+        for person_id, embeddings in person_embeddings.items():
+            # Compute average embedding for this person
+            avg_embedding = np.mean(embeddings, axis=0)
+            # Normalize for cosine distance
+            avg_embedding = avg_embedding / np.linalg.norm(avg_embedding)
+
+            dist = self._backend.compute_distance(avg_embedding, encoding)
+
+            # Also check minimum distance to any individual embedding
+            # (helps when person has diverse appearances)
+            min_individual_dist = min(
+                self._backend.compute_distance(emb, encoding)
+                for emb in embeddings
+            )
+
+            # Use the better of average or best individual match
+            effective_dist = min(dist, min_individual_dist)
+
+            if effective_dist < best_distance:
+                best_distance = effective_dist
+                best_person_id = person_id
 
         if best_distance < self.threshold:
             # Match found
-            person_id, person_name, _ = known_faces[best_match_idx]
-            # Optionally store this embedding too (improves future matching)
+            person_name = person_names[best_person_id]
+            # Store this embedding too (improves future matching)
             # Only store if it's different enough from existing ones
             store_threshold = 0.3 if self.backend_name == BACKEND_DLIB else 0.15
             if best_distance > store_threshold:
-                self.db.add_embedding(person_id, encoding, source_video)
+                self.db.add_embedding(best_person_id, encoding, source_video)
             return person_name
         else:
             # New person
-            existing_person_ids = set(f[0] for f in known_faces)
-            new_person_num = len(existing_person_ids) + 1
+            new_person_num = len(person_names) + 1
             new_name = f"Person {new_person_num}"
             person_id = self.db.add_person(new_name)
             self.db.add_embedding(person_id, encoding, source_video)

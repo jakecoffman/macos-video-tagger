@@ -86,13 +86,19 @@
         .video-card:hover .play-icon {
             color: rgba(255,255,255,0.6);
         }
-        .video-thumbnail video {
+        .video-thumbnail img {
             width: 100%;
             height: 100%;
             object-fit: cover;
         }
-        .video-thumbnail video.loaded + .play-icon {
-            display: none;
+        .video-thumbnail img.loaded {
+            opacity: 1;
+        }
+        .video-thumbnail img.loading {
+            opacity: 0;
+        }
+        .video-thumbnail img.loaded + .play-icon {
+            display: block;
         }
         .video-info {
             padding: 15px;
@@ -396,13 +402,13 @@
 
             grid.innerHTML = videos.map(video => `
                 <div class="video-card">
-                    <a href="/video${encodeURIComponent(video.path)}">
-                        <div class="video-thumbnail" data-video-url="/api/video?path=${encodeURIComponent(video.path)}">
+                    <a href="/video/${encodeURIComponent(video.path)}">
+                        <div class="video-thumbnail" data-thumbnail-url="/api/thumbnail?path=${encodeURIComponent(video.path)}">
                             <span class="play-icon">▶</span>
                         </div>
                     </a>
                     <div class="video-info">
-                        <a href="/video${encodeURIComponent(video.path)}" style="text-decoration: none; color: inherit;">
+                        <a href="/video/${encodeURIComponent(video.path)}" style="text-decoration: none; color: inherit;">
                             <div class="video-title">${escapeHtml(video.filename)}</div>
                         </a>
                         <div class="tags">
@@ -415,7 +421,7 @@
 
             // Observe all thumbnails for lazy loading
             grid.querySelectorAll('.video-thumbnail').forEach(thumb => {
-                videoObserver.observe(thumb);
+                thumbnailObserver.observe(thumb);
             });
         }
 
@@ -428,41 +434,35 @@
             setTimeout(() => status.classList.remove('show'), 3000);
         }
 
-        // Lazy loading observer for video thumbnails
-        const videoObserver = new IntersectionObserver((entries) => {
+        // Lazy loading observer for thumbnail images
+        const thumbnailObserver = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
                     const thumbnail = entry.target;
-                    const videoUrl = thumbnail.dataset.videoUrl;
-                    if (videoUrl && !thumbnail.dataset.loading) {
+                    const thumbnailUrl = thumbnail.dataset.thumbnailUrl;
+                    if (thumbnailUrl && !thumbnail.dataset.loading) {
                         thumbnail.dataset.loading = 'true';
-                        const video = document.createElement('video');
-                        video.muted = true;
-                        video.playsInline = true;
-                        video.preload = 'metadata';
+                        const img = document.createElement('img');
+                        img.className = 'loading';
+                        img.alt = 'Video thumbnail';
 
-                        video.addEventListener('loadeddata', () => {
-                            // Seek to 0.5s for thumbnail
-                            if (video.duration > 0.5) {
-                                video.currentTime = 0.5;
-                            }
+                        img.addEventListener('load', () => {
+                            img.classList.remove('loading');
+                            img.classList.add('loaded');
                         });
-                        video.addEventListener('seeked', () => {
-                            video.classList.add('loaded');
-                        });
-                        // Fallback if seek doesn't fire
-                        video.addEventListener('loadedmetadata', () => {
-                            setTimeout(() => video.classList.add('loaded'), 100);
+                        img.addEventListener('error', () => {
+                            // On error, show play icon only
+                            img.remove();
                         });
 
-                        thumbnail.insertBefore(video, thumbnail.firstChild);
-                        video.src = videoUrl;
+                        thumbnail.insertBefore(img, thumbnail.firstChild);
+                        img.src = thumbnailUrl;
                     }
-                    videoObserver.unobserve(thumbnail);
+                    thumbnailObserver.unobserve(thumbnail);
                 }
             });
         }, {
-            rootMargin: '50px',
+            rootMargin: '100px',
             threshold: 0
         });
 
