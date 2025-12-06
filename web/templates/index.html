@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Tagger</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #e0e0e0;
+        }
+        h1 {
+            margin: 0 0 20px 0;
+            color: #fff;
+        }
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #333;
+            padding-bottom: 10px;
+        }
+        .tab {
+            padding: 10px 20px;
+            background: #2a2a2a;
+            border: none;
+            border-radius: 8px 8px 0 0;
+            color: #aaa;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .tab.active {
+            background: #3a3a3a;
+            color: #fff;
+        }
+        .tab:hover {
+            background: #3a3a3a;
+        }
+        .panel {
+            display: none;
+        }
+        .panel.active {
+            display: block;
+        }
+
+        /* Videos Grid */
+        .videos-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        .video-card {
+            background: #2a2a2a;
+            border-radius: 12px;
+            overflow: hidden;
+            transition: transform 0.2s;
+        }
+        .video-card:hover {
+            transform: translateY(-4px);
+        }
+        .video-card a {
+            text-decoration: none;
+            color: inherit;
+        }
+        .video-thumbnail {
+            width: 100%;
+            aspect-ratio: 16/9;
+            background: linear-gradient(135deg, #1a1a2e, #16213e);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+        .play-icon {
+            font-size: 48px;
+            color: rgba(255,255,255,0.3);
+            position: absolute;
+            pointer-events: none;
+        }
+        .video-card:hover .play-icon {
+            color: rgba(255,255,255,0.6);
+        }
+        .video-thumbnail video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .video-thumbnail video.loaded + .play-icon {
+            display: none;
+        }
+        .video-info {
+            padding: 15px;
+        }
+        .video-title {
+            font-weight: 600;
+            margin-bottom: 10px;
+            word-break: break-word;
+            color: #fff;
+        }
+        .tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .tag {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .tag.content {
+            background: #2d4a2d;
+            color: #7dd87d;
+        }
+        .tag.person {
+            background: #3d3a4d;
+            color: #a8a0d0;
+        }
+
+        /* Persons Panel */
+        .persons-list {
+            max-width: 600px;
+        }
+        .person-item {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 15px;
+            background: #2a2a2a;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+        .person-id {
+            color: #666;
+            font-size: 12px;
+            width: 30px;
+        }
+        .person-name {
+            flex: 1;
+            font-size: 16px;
+        }
+        .person-name input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #444;
+            border-radius: 6px;
+            background: #1a1a1a;
+            color: #fff;
+            font-size: 16px;
+        }
+        .person-name input:focus {
+            outline: none;
+            border-color: #666;
+        }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        .btn-primary {
+            background: #4a7c4a;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #5a8c5a;
+        }
+        .btn-secondary {
+            background: #444;
+            color: white;
+        }
+        .btn-secondary:hover {
+            background: #555;
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Status message */
+        .status {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            border-radius: 8px;
+            background: #2d4a2d;
+            color: #7dd87d;
+            display: none;
+        }
+        .status.error {
+            background: #4a2d2d;
+            color: #d87d7d;
+        }
+        .status.show {
+            display: block;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+        .empty-state h2 {
+            color: #888;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎬 Video Tagger</h1>
+
+    <div class="tabs">
+        <button class="tab active" data-panel="videos">Videos</button>
+        <button class="tab" data-panel="persons">People</button>
+    </div>
+
+    <div id="videos" class="panel active">
+        <div id="videos-grid" class="videos-grid">
+            <!-- Videos will be loaded here -->
+        </div>
+    </div>
+
+    <div id="persons" class="panel">
+        <p style="color: #888; margin-bottom: 20px;">
+            Rename people to update their tags across all videos.
+        </p>
+        <div id="persons-list" class="persons-list">
+            <!-- Persons will be loaded here -->
+        </div>
+    </div>
+
+    <div id="status" class="status"></div>
+
+    <script>
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.panel).classList.add('active');
+            });
+        });
+
+        // Show status message
+        function showStatus(message, isError = false) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.classList.toggle('error', isError);
+            status.classList.add('show');
+            setTimeout(() => status.classList.remove('show'), 3000);
+        }
+
+        // Lazy loading observer for video thumbnails
+        const videoObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const thumbnail = entry.target;
+                    const videoUrl = thumbnail.dataset.videoUrl;
+                    if (videoUrl && !thumbnail.dataset.loading) {
+                        thumbnail.dataset.loading = 'true';
+                        const video = document.createElement('video');
+                        video.muted = true;
+                        video.playsInline = true;
+                        video.preload = 'metadata';
+
+                        video.addEventListener('loadeddata', () => {
+                            // Seek to 0.5s for thumbnail
+                            if (video.duration > 0.5) {
+                                video.currentTime = 0.5;
+                            }
+                        });
+                        video.addEventListener('seeked', () => {
+                            video.classList.add('loaded');
+                        });
+                        // Fallback if seek doesn't fire
+                        video.addEventListener('loadedmetadata', () => {
+                            setTimeout(() => video.classList.add('loaded'), 100);
+                        });
+
+                        thumbnail.insertBefore(video, thumbnail.firstChild);
+                        video.src = videoUrl;
+                    }
+                    videoObserver.unobserve(thumbnail);
+                }
+            });
+        }, {
+            rootMargin: '50px',
+            threshold: 0
+        });
+
+        // Load videos
+        async function loadVideos() {
+            const grid = document.getElementById('videos-grid');
+            try {
+                const response = await fetch('/api/videos');
+                const videos = await response.json();
+
+                if (videos.length === 0) {
+                    grid.innerHTML = `
+                        <div class="empty-state">
+                            <h2>No videos processed yet</h2>
+                            <p>Run the video tagger on a directory first.</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                grid.innerHTML = videos.map(video => `
+                    <div class="video-card">
+                        <a href="/video${encodeURIComponent(video.path)}">
+                            <div class="video-thumbnail" data-video-url="/api/video?path=${encodeURIComponent(video.path)}">
+                                <span class="play-icon">▶</span>
+                            </div>
+                            <div class="video-info">
+                                <div class="video-title">${escapeHtml(video.filename)}</div>
+                                <div class="tags">
+                                    ${video.content_tags.map(t => `<span class="tag content">${escapeHtml(t)}</span>`).join('')}
+                                    ${video.person_tags.map(t => `<span class="tag person">${escapeHtml(t)}</span>`).join('')}
+                                </div>
+                            </div>
+                        </a>
+                    </div>
+                `).join('');
+
+                // Observe all thumbnails for lazy loading
+                grid.querySelectorAll('.video-thumbnail').forEach(thumb => {
+                    videoObserver.observe(thumb);
+                });
+            } catch (err) {
+                grid.innerHTML = `<div class="empty-state"><h2>Error loading videos</h2><p>${err.message}</p></div>`;
+            }
+        }
+
+        // Load persons
+        async function loadPersons() {
+            const list = document.getElementById('persons-list');
+            try {
+                const response = await fetch('/api/persons');
+                const persons = await response.json();
+
+                if (persons.length === 0) {
+                    list.innerHTML = `
+                        <div class="empty-state">
+                            <h2>No people recognized yet</h2>
+                            <p>Process some videos with faces first.</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                list.innerHTML = persons.map(person => `
+                    <div class="person-item" data-id="${person.id}">
+                        <span class="person-id">#${person.id}</span>
+                        <div class="person-name">
+                            <input type="text" value="${escapeHtml(person.name)}" data-original="${escapeHtml(person.name)}">
+                        </div>
+                        <button class="btn btn-primary" onclick="renamePerson(${person.id}, this)" disabled>Save</button>
+                    </div>
+                `).join('');
+
+                // Enable save button when name changes
+                list.querySelectorAll('input').forEach(input => {
+                    input.addEventListener('input', (e) => {
+                        const btn = e.target.closest('.person-item').querySelector('button');
+                        btn.disabled = e.target.value === e.target.dataset.original || !e.target.value.trim();
+                    });
+                    input.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter') {
+                            const btn = e.target.closest('.person-item').querySelector('button');
+                            if (!btn.disabled) btn.click();
+                        }
+                    });
+                });
+            } catch (err) {
+                list.innerHTML = `<div class="empty-state"><h2>Error loading persons</h2><p>${err.message}</p></div>`;
+            }
+        }
+
+        // Rename person
+        async function renamePerson(id, btn) {
+            const item = btn.closest('.person-item');
+            const input = item.querySelector('input');
+            const newName = input.value.trim();
+
+            if (!newName) return;
+
+            btn.disabled = true;
+            btn.textContent = 'Saving...';
+
+            try {
+                const response = await fetch(`/api/persons/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: newName })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    input.dataset.original = newName;
+                    showStatus(`Renamed "${result.old_name}" to "${result.new_name}"`);
+                    // Reload videos to show updated tags
+                    loadVideos();
+                } else {
+                    showStatus(result.error || 'Failed to rename', true);
+                }
+            } catch (err) {
+                showStatus('Error: ' + err.message, true);
+            }
+
+            btn.textContent = 'Save';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Initial load
+        loadVideos();
+        loadPersons();
+    </script>
+</body>
+</html>
