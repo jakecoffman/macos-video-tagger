@@ -163,6 +163,11 @@
             border-radius: 16px;
             font-size: 13px;
             font-weight: 500;
+            cursor: pointer;
+            transition: opacity 0.15s;
+        }
+        .filter-bar .filter-tag:hover {
+            opacity: 0.8;
         }
         .filter-bar .filter-tag.content {
             background: #2d4a2d;
@@ -292,9 +297,9 @@
     <div id="videos" class="panel active">
         <div id="filter-bar" class="filter-bar">
             <span class="label">Filtering by:</span>
-            <span id="filter-tag" class="filter-tag"></span>
+            <span id="filter-tags"></span>
             <span id="video-count" class="video-count"></span>
-            <button class="clear-filter" onclick="clearFilter()">✕ Clear</button>
+            <button class="clear-filter" onclick="clearFilter()">✕ Clear all</button>
         </div>
         <div id="videos-grid" class="videos-grid">
             <!-- Videos will be loaded here -->
@@ -313,9 +318,47 @@
     <div id="status" class="status"></div>
 
     <script>
-        // Filter state
-        let currentFilter = null;  // { tag: string, type: 'content' | 'person' }
+        // Filter state - array of { tag: string, type: 'content' | 'person' }
+        let filters = [];
         let allVideos = [];  // Cache all videos for filtering
+
+        // Read filters from URL on page load
+        function readFilterFromURL() {
+            const params = new URLSearchParams(window.location.search);
+            filters = [];
+            // Support multiple tags: ?content=tag1,tag2&person=tag3
+            const contentTags = params.get('content');
+            const personTags = params.get('person');
+            if (contentTags) {
+                contentTags.split(',').forEach(tag => {
+                    if (tag) filters.push({ tag, type: 'content' });
+                });
+            }
+            if (personTags) {
+                personTags.split(',').forEach(tag => {
+                    if (tag) filters.push({ tag, type: 'person' });
+                });
+            }
+        }
+
+        // Update URL with current filters
+        function updateURL() {
+            const url = new URL(window.location);
+            url.searchParams.delete('content');
+            url.searchParams.delete('person');
+            const contentTags = filters.filter(f => f.type === 'content').map(f => f.tag);
+            const personTags = filters.filter(f => f.type === 'person').map(f => f.tag);
+            if (contentTags.length) url.searchParams.set('content', contentTags.join(','));
+            if (personTags.length) url.searchParams.set('person', personTags.join(','));
+            history.pushState({}, '', url);
+        }
+
+        // Handle browser back/forward
+        window.addEventListener('popstate', () => {
+            readFilterFromURL();
+            updateFilterBar();
+            renderVideos();
+        });
 
         // Tab switching
         document.querySelectorAll('.tab').forEach(tab => {
@@ -327,20 +370,35 @@
             });
         });
 
-        // Filter by tag
+        // Toggle a tag filter (add if not present, remove if present)
         function filterByTag(tag, type, event) {
             if (event) {
                 event.preventDefault();
                 event.stopPropagation();
             }
-            currentFilter = { tag, type };
+            const idx = filters.findIndex(f => f.tag === tag && f.type === type);
+            if (idx >= 0) {
+                filters.splice(idx, 1);  // Remove if already filtered
+            } else {
+                filters.push({ tag, type });  // Add new filter
+            }
+            updateURL();
             updateFilterBar();
             renderVideos();
         }
 
-        // Clear filter
+        // Remove a specific filter
+        function removeFilter(tag, type) {
+            filters = filters.filter(f => !(f.tag === tag && f.type === type));
+            updateURL();
+            updateFilterBar();
+            renderVideos();
+        }
+
+        // Clear all filters
         function clearFilter() {
-            currentFilter = null;
+            filters = [];
+            updateURL();
             updateFilterBar();
             renderVideos();
         }
@@ -348,13 +406,14 @@
         // Update filter bar display
         function updateFilterBar() {
             const bar = document.getElementById('filter-bar');
-            const tagEl = document.getElementById('filter-tag');
+            const tagsEl = document.getElementById('filter-tags');
             const countEl = document.getElementById('video-count');
 
-            if (currentFilter) {
+            if (filters.length > 0) {
                 bar.classList.add('active');
-                tagEl.textContent = currentFilter.tag;
-                tagEl.className = 'filter-tag ' + currentFilter.type;
+                tagsEl.innerHTML = filters.map(f =>
+                    `<span class="filter-tag ${f.type}" onclick="removeFilter('${escapeHtml(f.tag)}', '${f.type}')">${escapeHtml(f.tag)} ✕</span>`
+                ).join(' ');
 
                 const filtered = getFilteredVideos();
                 countEl.textContent = `(${filtered.length} video${filtered.length !== 1 ? 's' : ''})`;
@@ -363,16 +422,18 @@
             }
         }
 
-        // Get filtered videos
+        // Get filtered videos (must match ALL filters)
         function getFilteredVideos() {
-            if (!currentFilter) return allVideos;
+            if (filters.length === 0) return allVideos;
 
             return allVideos.filter(video => {
-                if (currentFilter.type === 'content') {
-                    return video.content_tags.includes(currentFilter.tag);
-                } else {
-                    return video.person_tags.includes(currentFilter.tag);
-                }
+                return filters.every(f => {
+                    if (f.type === 'content') {
+                        return video.content_tags.includes(f.tag);
+                    } else {
+                        return video.person_tags.includes(f.tag);
+                    }
+                });
             });
         }
 
@@ -382,11 +443,11 @@
             const videos = getFilteredVideos();
 
             if (videos.length === 0) {
-                if (currentFilter) {
+                if (filters.length > 0) {
                     grid.innerHTML = `
                         <div class="empty-state">
-                            <h2>No videos with this tag</h2>
-                            <p>Try a different filter or <a href="#" onclick="clearFilter(); return false;" style="color: #7dd87d;">clear the filter</a>.</p>
+                            <h2>No videos match these filters</h2>
+                            <p>Try removing some filters or <a href="#" onclick="clearFilter(); return false;" style="color: #7dd87d;">clear all filters</a>.</p>
                         </div>
                     `;
                 } else {
@@ -473,6 +534,7 @@
                 const response = await fetch('/api/videos');
                 allVideos = await response.json();
 
+                updateFilterBar();
                 renderVideos();
             } catch (err) {
                 grid.innerHTML = `<div class="empty-state"><h2>Error loading videos</h2><p>${err.message}</p></div>`;
@@ -566,6 +628,7 @@
         }
 
         // Initial load
+        readFilterFromURL();
         loadVideos();
         loadPersons();
     </script>
